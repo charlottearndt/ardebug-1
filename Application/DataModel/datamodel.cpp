@@ -11,17 +11,15 @@
 #include "../Core/log.h"
 #include "../Core/settings.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonValue>
+
 #include <iostream>
 #include <stdio.h>
 
 using namespace  std;
-
-/* sortRobotDataByID
- * Helper function used when sorting the robots.
- */
-bool sortRobotDataByID(RobotData* lhs, RobotData* rhs) {
-    return lhs->getID() < rhs->getID();
-}
 
 /* Constructor
  * Set up the list of robot data (vector).
@@ -54,28 +52,16 @@ DataModel::~DataModel(void) {
     robotDataList.clear();
 }
 
-/* getRobotByIndex
- * Return a pointer to the data of the robot at the given index. Returns null
- * if index is invalid.
- */
-RobotData* DataModel::getRobotByIndex(int idx) {
-    return robotDataList.at(idx);
-}
-
 /* getRobotByID
  * Return a pointer to the data of the robot with the given ID. Returns null
  * if ID cannot be found.
  */
-RobotData* DataModel::getRobotByID(int id) {
-    for (size_t i = 0; i < robotDataList.size(); i++) {
-        RobotData* robot = (RobotData*)robotDataList.at(i);
+RobotData* DataModel::getRobotByID(QString id) {
+    auto matchingRobot = std::find_if(robotDataList.begin(), robotDataList.end(), [&id](RobotData* r){return r->getID() == id;});
+    if(matchingRobot != robotDataList.end())
+        return *matchingRobot;
 
-        if (robot->getID() == id) {
-            return robot;
-        }
-    }
-
-    return 0;
+    return nullptr;
 }
 
 /* getRobotList
@@ -89,13 +75,19 @@ QStringListModel* DataModel::getRobotList(void) {
         RobotData* d = (RobotData*)robotDataList.at(i);
 
         // Append the robots ID and name
-        QString str(QString::number(d->getID()) + ": " + d->getName());
+        QString str(d->getID());
         list.append(str);
     }
 
     // Return the list model
     robotListModel->setStringList(list);
     return robotListModel;
+}
+
+RobotData* DataModel::setSelectedRobot(int idx)
+{
+    selectedRobotID = robotDataList[idx]->getID();
+    return robotDataList[idx];
 }
 
 /* getRobotCount
@@ -106,106 +98,269 @@ int DataModel::getRobotCount(void) {
     return robotDataList.size();
 }
 
+ValueType typeOfJsonValue(QJsonValue val)
+{
+    if(val.isString())
+        return String;
+
+    if(val.isArray())
+        return Array;
+
+    if(val.isBool())
+        return Bool;
+
+    if(val.isDouble())
+        return Double;
+
+    if(val.isObject())
+        return Object;
+
+    return Unknown;
+}
+
+void parseBoolValue(QMap<QString, RobotStateValue>& dict, QString name, QJsonValueRef val);
+void parseDoubleValue(QMap<QString, RobotStateValue>& dict, QString name, QJsonValueRef val);
+void parseStringValue(QMap<QString, RobotStateValue>& dict, QString name, QJsonValueRef val);
+void populateListFromJson(QList<RobotStateValue>& array, QJsonArray vals);
+void populateObjectFromJson(QMap<QString,RobotStateValue>& obj, QJsonObject jsonObj);
+
+
+void parseBoolValue(QMap<QString, RobotStateValue>& dict, QString name, QJsonValueRef val)
+{
+    RobotStateValue v;
+    v.type = Bool;
+    v.boolValue = val.toBool();
+    dict[name] = v;
+}
+
+void parseDoubleValue(QMap<QString, RobotStateValue>& dict, QString name, QJsonValueRef val)
+{
+    RobotStateValue v;
+    v.type = Double;
+    v.doubleValue = val.toDouble();
+    dict[name] = v;
+}
+
+void parseStringValue(QMap<QString, RobotStateValue>& dict, QString name, QJsonValueRef val)
+{
+    RobotStateValue v;
+    v.type = String;
+    v.stringValue = val.toString();
+    dict[name] = v;
+}
+
+void populateListFromJson(QList<RobotStateValue>& array, QJsonArray vals)
+{
+    auto type = typeOfJsonValue(vals[0]);
+    switch(type)
+    {
+    case Double:
+    {
+        for(auto v_a : vals)
+        {
+            RobotStateValue v_i;
+            v_i.type = Double;
+            v_i.doubleValue = v_a.toDouble();
+            array.push_back(v_i);
+        }
+        break;
+    }
+    case Bool:
+    {
+        for(auto v_a : vals)
+        {
+            RobotStateValue v_i;
+            v_i.type = Bool;
+            v_i.boolValue = v_a.toBool();
+            array.push_back(v_i);
+        }
+        break;
+    }
+    case String:
+    {
+        for(auto v_a : vals)
+        {
+            RobotStateValue v_i;
+            v_i.type = String;
+            v_i.stringValue = v_a.toString();
+            array.push_back(v_i);
+        }
+        break;
+    }
+    case Array:
+    {
+        for(auto v_a : vals)
+        {
+            RobotStateValue v_i;
+            v_i.type = Array;
+            v_i.arrayValue = {};
+            populateListFromJson(v_i.arrayValue, v_a.toArray());
+        }
+        break;
+    }
+    case Object:
+    {
+        for(auto v_a : vals)
+        {
+            RobotStateValue v_i;
+            v_i.type = Object;
+            v_i.objectValue = {};
+            populateObjectFromJson(v_i.objectValue, v_a.toObject());
+        }
+        break;
+    }
+    default:
+    {
+
+    }
+    }
+}
+
+void populateObjectFromJson(QMap<QString,RobotStateValue>& obj, QJsonObject jsonObj)
+{
+    for(auto key : jsonObj.keys())
+    {
+        auto type = typeOfJsonValue(jsonObj[key]);
+        switch(type)
+        {
+        case Double:
+        {
+            RobotStateValue v_i;
+            v_i.type = Double;
+            v_i.doubleValue = jsonObj[key].toDouble();
+            obj[key] = v_i;
+            break;
+        }
+        case String:
+        {
+            RobotStateValue v_i;
+            v_i.type = String;
+            v_i.stringValue = jsonObj[key].toString();
+            obj[key] = v_i;
+            break;
+        }
+        case Bool:
+        {
+            RobotStateValue v_i;
+            v_i.type = Bool;
+            v_i.boolValue = jsonObj[key].toBool();
+            obj[key] = v_i;
+            break;
+        }
+        case Array:
+        {
+            RobotStateValue v_i;
+            v_i.type = Array;
+            v_i.arrayValue = {};
+            populateListFromJson(v_i.arrayValue, jsonObj[key].toArray());
+            obj[key] = v_i;
+            break;
+        }
+        case Object:
+        {
+            RobotStateValue v_i;
+            v_i.type = Object;
+            v_i.objectValue = {};
+            populateObjectFromJson(v_i.objectValue, jsonObj[key].toObject());
+            obj[key] = v_i;
+            break;
+        }
+        default:
+        {
+
+        }
+        }
+    }
+}
+
 /* newData
  * Slot. Called when new data arrives.
  */
 void DataModel::newData(const QString &dataString) {
-    int id, type;
-    int idx;
-    size_t oldListSize = robotDataList.size();
-    bool listChanged = false;
+    // Parse the received data as a JSON string
+    QJsonDocument j = QJsonDocument::fromJson(dataString.toUtf8());
+    QJsonObject message = j.object();
 
-    // Split into individual data elements
-    QStringList data = dataString.split(QRegExp("\\s+"));
-
-    // Data packets must contain minimum of 3 elements; ID, type, content
-    if (data.length() < 3) {
-        Log::instance()->logMessage("Invalid data packet: " + dataString, true);
+    // Check that
+    if(!message.contains("id"))
         return;
+
+    QString robotId = message["id"].toString();
+    message.remove("id");
+    addRobotIfNotExist(robotId);
+    RobotData* robot = getRobotByID(robotId);
+
+    Log::instance()->logMessage("Message from robot " + robotId, true);
+
+    if(message.contains("pose"))
+    {
+        QJsonObject jsonPose = message["pose"].toObject();
+        Pose p;
+        p.orientation = jsonPose["orientation"].toDouble();
+        p.position.x = jsonPose["x"].toDouble();
+        p.position.y = jsonPose["y"].toDouble();
+        robot->setPos(p.position.x, p.position.y);
+        robot->setAngle(p.orientation);
+
+        message.remove("pose");
     }
 
-    // Try to obtain the ID from the first element
-    bool ok;
-    id = data[0].toInt(&ok, 10);
-
-    if (!ok || id < 0) {
-        Log::instance()->logMessage("Invalid robot ID: " + data[0] + ", Data ignored.", true);
-        return;
-    }
-
-    // Try to obtain the packet type from the second element
-    type = data[1].toInt(&ok, 10);
-
-    if (!ok || type < 0 || type >= PACKET_TYPE_INVALID) {
-        Log::instance()->logMessage("Invalid packet type: " + data[1] + ", Data ignored.", true);
-        return;
-    }
-
-    /* If this is a position packet the ID will be an ARuCo ID. Check the ID mapping table to see if
-     * this needs to be mapped to a different robot ID.
-     */
-    if (type == PACKET_TYPE_POSITION) {
-        for (size_t i = 0; i < Settings::instance()->idMapping.size(); i++) {
-            ArucoIDPair* pair = Settings::instance()->idMapping.at(i);
-
-            // If there is a match in the map, swap for the correct robot ID
-            if (pair->arucoID == id) {
-                id = pair->robotID;
-                break;
-            }
+    for(QString key : message.keys())
+    {
+        auto val = message[key];
+        switch(typeOfJsonValue(val))
+        {
+        case Bool:
+        {
+            robot->setBoolValue(key, val.toBool());
+            break;
         }
-    }
-
-    // Get the list index of the given robot. New robot added if index not found
-    idx = getRobotIndex(id, true);
-    RobotData* robot = robotDataList.at(idx);
-
-    // Handle the packet data
-    switch(type) {
-    case PACKET_TYPE_WATCHDOG:
-        if (!(robot->getName() == data[2])) {
-            robot->setName(data[2]);
-            listChanged = true;
+        case Double:
+        {
+            robot->setDoubleValue(key, val.toDouble());
+            break;
         }
-        Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + " - Watchdog Packet. Name: " + data[2], false);
-        break;
-    case PACKET_TYPE_STATE:
-        robot->setState(data[2]);
-        Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + " - State: " + data[2], false);
-        break;
-    case PACKET_TYPE_POSITION:
-        if (data.length() > 4) {
-            parsePositionPacket(robot, data[2], data[3], data[4]);
-            //Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + ": Position X:" + data[2] + ", Y:" + data[3] + ", A:" + data[4], false);
+        case String:
+        {
+            robot->setStringValue(key, val.toString());
+            break;
         }
-        break;
-    case PACKET_TYPE_PROXIMITY:
-        parseProximityPacket(robot, data, false);
-        break;
-    case PACKET_TYPE_BACKGROUND_IR:
-        parseProximityPacket(robot, data, true);
-        break;
-    case PACKET_TYPE_MSG:
-        data.removeFirst();
-        data.removeFirst();
-        Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + " - Message: " + data.join(" "), true);
-        break;
-    case PACKET_TYPE_CUSTOM:
-        if (data.length() > 3) {
-            robot->insertCustomData(data[2], data[3]);
-            Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + " - Custom Data: " + data[2] + " " + data[3], false);
+        case Object:
+        {
+            auto& v = robot->getObjectValue(key);
+            populateObjectFromJson(v, val.toObject());
+            break;
         }
-    default:
-        break;
-    }
+        case Array:
+        {
+            auto& v = robot->getArrayValue(key);
+            populateListFromJson(v, val.toArray());
+            break;
+        }
+        default:
+        {
 
-    // Check if the list of robots has changed size and needs updating
-    if (robotDataList.size() != oldListSize) {
-        listChanged = true;
+        }
+        }
     }
 
     // Signal to the UI that new data is available
-    emit modelChanged(listChanged);
+    emit modelChanged(true);
+}
+
+void DataModel::newRobotPosition(QString id, Pose p)
+{
+    addRobotIfNotExist(id);
+    RobotData* robot = getRobotByID(id);
+    robot->setPos(p.position.x, p.position.y);
+    robot->setAngle(p.orientation);
+}
+
+void DataModel::addRobotIfNotExist(QString id)
+{
+    RobotData* r = getRobotByID(id);
+    if(r == nullptr)
+        robotDataList.push_back(new RobotData{id});
 }
 
 /* parsePositionPacket
@@ -237,102 +392,17 @@ void DataModel::parsePositionPacket(RobotData* robot, QString xString, QString y
     updateAveragePosition();
 }
 
-/* parseProximityPacket
- * Parses raw proximity sensor data values into the data model
- */
-void DataModel::parseProximityPacket(RobotData *robot, QStringList data, bool background) {
-    int proxData[PROX_SENS_COUNT] = {0};
-    int mask = 0;
-
-    // data 0 and 1 are ID and Type. Iterate from data 2 onwards
-    for (int i = 2; i < data.length() && i < PROX_SENS_COUNT + 2; i++) {
-        // Read string into int
-        bool ok = false;
-        int prox = data[i].toInt(&ok);
-
-        // If valid value, store in priximity data array
-        if (ok && prox >= 0) {
-            proxData[i - 2] = prox;
-
-            // Set mask bit to show value at i is valid
-            mask |= 1 << (i-2);
-        }
-    }
-
-    // Update the robots
-    if (background) {
-        robot->updateBackgroundIR(proxData, mask);
-    } else {
-        robot->updateProximitySensorData(proxData, mask);
-    }
-
-    // Log the data
-    data.removeFirst();
-    data.removeFirst();
-    if (background) {
-        Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + " - Background IR Data: " + data.join(" "), false);
-    } else {
-        Log::instance()->logMessage("Robot " + QString::number(robot->getID()) + " - IR Data: " + data.join(" "), false);
-    }
-}
-
-/* getRobotIndex
- * Finds the index of the robot with the given id. If create is set to true, and a robot with
- * the corresponding id is not found, one will be created. If not, -1 is returned to indicate that
- * the robot does not exist.
- */
-int DataModel::getRobotIndex(int id, bool create) {
-    bool found = false;
-    int idx;
-
-    // Check if the data is related to a known robot
-    for (idx = 0; idx < (int)robotDataList.size(); idx++) {
-        RobotData* d = (RobotData*)robotDataList.at(idx);
-
-        if (d->getID() == id) {
-            found = true;
-            break;
-        }
-    }
-
-    // Robot was not found
-    if (!found) {
-        // If create is false, return -1 to indicate robot not found.
-        if (!create) {
-            return -1;
-        }
-
-        // Add the robot to the list
-        RobotData* newRobot = new RobotData(id, "Unknown");
-        robotDataList.push_back(newRobot);
-
-        // Sort
-        sort(robotDataList.begin(), robotDataList.end(), sortRobotDataByID);
-
-        // Use recursion to get the index
-        idx = getRobotIndex(id);
-    }
-
-    // Return the index
-    return idx;
-}
-
 /* deleteRobot
  * Remove a robot from the data model, including all of its data.
  */
-void DataModel::deleteRobot(int ID) {
+void DataModel::deleteRobot(QString id) {
     // Reset the robot selection if it matches to avoid null pointer errors
-    if (this->selectedRobotID == ID) {
-        this->selectedRobotID = -1;
+    if (this->selectedRobotID == id) {
+        this->selectedRobotID = "";
     }
 
     // Retrieve the index of the robot to be deleted. Do not create it not found.
-    int idx = getRobotIndex(ID, false);
-
-    // If index in range, erase the robot
-    if (idx >= 0 && (size_t)idx < robotDataList.size()) {
-        robotDataList.erase(robotDataList.begin() + idx);
-    }
+    std::remove_if(robotDataList.begin(), robotDataList.end(), [&id](RobotData* r){ return r->getID() == id; });
 }
 
 /* updateAveragePosition
@@ -346,8 +416,8 @@ void DataModel::updateAveragePosition(void) {
     for (int idx = 0; idx < robotCount; idx++) {
         RobotData* d = (RobotData*)robotDataList.at(idx);
 
-        x += d->getPos().x;
-        y += d->getPos().y;
+        x += d->getPos().position.x;
+        y += d->getPos().position.y;
     }
 
     averageRobotPos.x = x/robotCount;

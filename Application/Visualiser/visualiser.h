@@ -4,12 +4,15 @@
 #include "../DataModel/datamodel.h"
 #include "visconfig.h"
 #include "../Core/util.h"
+#include "vistext.h"
 
 #include <QWidget>
 #include <QImage>
 #include <QPainter>
 #include <QTimer>
 #include <QMouseEvent>
+#include <QMutex>
+
 #include <opencv2/opencv.hpp>
 
 class Visualiser : public QWidget
@@ -21,17 +24,17 @@ public:
     Visualiser(QWidget *parent = 0);
     Visualiser(DataModel* dataModelRef);
 
-    QSize minimumSizeHint () const {return QSize(200, 200); }
+    QSize minimumSizeHint () const { return QSize(200, 200); }
 
     void checkFrameSize(void);
 
 public slots:
-    void showImage(const cv::Mat& image);
+    void refreshVisualisation();
+    void newVideoFrame(cv::Mat& image);
 
 signals:
     void frameSizeChanged(int width, int height);
-
-    void robotSelectedInVisualiser(int id);
+    void robotSelectedInVisualiser(QString id);
 
 protected:
     void paintEvent(QPaintEvent*);
@@ -39,11 +42,13 @@ protected:
 
     void mousePressEvent(QMouseEvent*);
 
-    QImage _qimage;
-    cv::Mat _tmp;
     DataModel* dataModelRef;
 
     Vector2D click;
+
+    QImage backgroundImage;
+
+    VisText* textVis;
 };
 
 #endif // VISUALISER_H

@@ -3,17 +3,21 @@
 
 #include <QString>
 #include <QTime>
-#include <opencv2/core.hpp>
 
 struct Vector2D {
-    float x;
-    float y;
+    double x;
+    double y;
+};
+
+struct Pose
+{
+    Vector2D position;
+    double orientation;
 };
 
 struct TrackResult {
-    int id;
-    Vector2D pos;
-    int angle;
+    QString id;
+    Pose pose;
 };
 
 struct StateTransition {

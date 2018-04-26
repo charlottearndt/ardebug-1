@@ -5,8 +5,6 @@
 #include <QStringListModel>
 #include <QTableWidget>
 
-#include <opencv2/core.hpp>
-
 #include "../Core/util.h"
 
 #define STATE_HISTORY_COUNT     10
@@ -15,75 +13,125 @@
 
 #define POS_HISTORY_INTERVAL    10
 
+enum ValueType
+{
+    String,
+    Double,
+    Bool,
+    Object,
+    Array,
+    Unknown
+};
+
+struct RobotStateValue
+{
+    ValueType type;
+
+    QString stringValue = "";
+    double doubleValue = 0;
+    bool boolValue = false;
+    QList<RobotStateValue> arrayValue = {};
+    QMap<QString, RobotStateValue> objectValue;
+};
+
 class RobotData
 {
     // Identifiers
-    int id;
-    QString name;
+    QString id;
 
     // State data
-    QString state;
-    QStringListModel knownStates;
-    QStringListModel stateTransitionList;
-    StateTransition stateTransitionHistory[STATE_HISTORY_COUNT];
-    int stateTransitionIndex;
+    QMap<QString, RobotStateValue> values;
 
     // Position
-    Vector2D pos;
-    Vector2D posHistory[POS_HISTORY_COUNT];
+    Pose pos;
+    Pose posHistory[POS_HISTORY_COUNT];
     int posHistoryIndex;
     int posHistoryFrameCount;
 
-    // Direction
-    int angle;
-
-    // Colour
-    cv::Scalar colour;
-
-    // Sensor Data
-    int proximityData[PROX_SENS_COUNT];
-    int backgroundIR[PROX_SENS_COUNT];
-
-    // Custom Data
-    std::map<QString, QString> customData;
-
 public:
-    RobotData(int id, QString name);
+    RobotData(QString id);
     ~RobotData(void);
 
-    int getID(void);
-    int getIDConst(void) const;
+    QString getID(void);
+    void setID(QString newId);
+    QString getIDConst(void) const;
 
-    QString getName(void);
-    void setName(QString name);
-
-    QString getState(void);
-    QStringListModel* getKnownStates(void);
-    QStringListModel* getStateTransitionList(void);
-    void setState(QString state);
-
-    Vector2D getPos(void);
-    void getPosHistory(Vector2D* result);
+    Pose getPos(void);
+    void getPosHistory(Pose* result);
     void setPos(float x, float y);
 
     int getAngle(void);
     void setAngle(int angle);
 
-    cv::Scalar getColour(void);
-    void setColour(cv::Scalar colour);
+    ValueType getValueType(QString key)
+    {
+        if(values.contains(key))
+            return values[key].type;
 
-    void updateProximitySensorData(int* data, int mask);
-    int getProximitySensorData(int sensor);
+        return ValueType::Unknown;
+    }
 
-    void updateBackgroundIR(int* data, int mask);
-    int getBackgroundIR(int sensor);
+    QList<QString> getKeys()
+    {
+        return values.keys();
+    }
 
-    void insertCustomData(QString key, QString value);
-    void populateCustomDataTable(QTableWidget* table);
-    QString getCustomData(QString key);
+    QList<QString> getKeys(ValueType type)
+    {
+        QList<QString> ret;
+        for(const auto& key : values.keys())
+            if(values[key].type == type || type == ValueType::Unknown)
+                ret.append(key);
+        return ret;
+    }
 
+    void setBoolValue(QString name, bool value)
+    {
+        auto& val = values[name];
+        val.type = Bool;
+        val.boolValue = value;
+    }
+
+    void setDoubleValue(QString name, double value)
+    {
+        auto& val = values[name];
+        val.type = Double;
+        val.doubleValue = value;
+    }
+
+    void setStringValue(QString name, QString value)
+    {
+        auto& val = values[name];
+        val.type = String;
+        val.stringValue = value;
+    }
+
+    bool getBoolValue(QString name) { return values[name].boolValue; }
+    double getDoubleValue(QString name) { return values[name].doubleValue; }
+    QString getStringValue(QString name) { return values[name].stringValue; }
+
+    QList<RobotStateValue>& getArrayValue(QString name)
+    {
+        if(!values.contains(name))
+        {
+            values[name].type = Array;
+            values[name].arrayValue = {};
+        }
+
+        return values[name].arrayValue;
+    }
+
+    QMap<QString, RobotStateValue>& getObjectValue(QString name)
+    {
+        if(!values.contains(name))
+        {
+            values[name].type = Object;
+            values[name].objectValue = {};
+        }
+
+        return values[name].objectValue;
+    }
 private:
-    void updateStateTransitionHistory(QString newState);
     void updatePositionHistory(void);
 };
 

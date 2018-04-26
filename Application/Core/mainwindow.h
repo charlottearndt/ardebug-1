@@ -8,10 +8,10 @@
 
 #include "../Networking/Bluetooth/bluetoothconfig.h"
 #include "../Visualiser/visualiser.h"
-#include "../Tracking/cameracontroller.h"
 #include "../DataModel/datamodel.h"
-#include "../UI/irdataview.h"
-#include "../UI/testingwindow.h"
+
+#include "Application/Tracking/aruco.h"
+#include "Application/Tracking/usbcamerathread.h"
 
 namespace Ui {
 class MainWindow;
@@ -22,14 +22,17 @@ class MainWindow : public QMainWindow
     Q_OBJECT
     QThread networkThread;
     QThread bluetoothThread;
-    QThread cameraThread;
     Visualiser* visualiser;
-    CameraController* cameraController;
     DataModel* dataModel;
-    IRDataView* irDataView;
+
+   // IRDataView* irDataView;
     Bluetoothconfig * btConfig;
 
-    TestingWindow* testingWindow;
+
+    std::map<int, QString> arucoNameMapping;
+    USBCameraThread cameraThread{"/dev/video0"};
+    ArUco arucoTracker{&arucoNameMapping};
+
     QDialog* addIDMappingDialog;
     QDialog* bluetoothConfigDialog;
 
@@ -47,7 +50,6 @@ signals:
     void changeStateBluetoothDevice(int);
     void disconnectBluetooth(void);
 
-
     void startReadingCamera(void);
     void stopReadingCamera(void);
 
@@ -60,7 +62,7 @@ public slots:
 
     void robotListSelectionChanged(const QItemSelection &selection);
 
-    void robotSelectedInVisualiser(int id);
+    void robotSelectedInVisualiser(QString id);
 
     void socketOpened(const int &sockfd) { this->sockfd = sockfd; }
 
@@ -95,8 +97,6 @@ private slots:
 
     void on_loggingButton_clicked();
 
-    void on_actionTesting_Window_triggered();
-
     void on_tagMappingDeleteButton_clicked();
 
     void on_tagMappingAddButton_clicked();
@@ -122,9 +122,6 @@ private:
 
     void setVideo(bool enabled);
     void updateOverviewTab(void);
-    void updateStateTab(void);
-    void updateProximityTab(void);
-    void updateCustomDataTab(void);
 
     void idMappingTableSetup(void);
 };

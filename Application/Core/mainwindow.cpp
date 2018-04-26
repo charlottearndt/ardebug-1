@@ -12,7 +12,11 @@
 #include "log.h"
 #include "../Networking/Wifi/datathread.h"
 #include "../Networking/Bluetooth/bluetoothdatathread.h"
-#include "../Tracking/machinevision.h"
+
+//#include "../Networking/Bluetooth/bluetoothconfig.h"
+
+//#include "../Tracking/machinevision.h"
+
 #include "../DataModel/datamodel.h"
 #include "../DataModel/robotdata.h"
 #include "../UI/addidmappingdialog.h"
@@ -89,42 +93,18 @@ MainWindow::MainWindow(QWidget *parent) :
     visualiser = new Visualiser(dataModel);
     visualiser->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
 
+    connect(dataModel, SIGNAL(modelChanged(bool)), visualiser, SLOT(refreshVisualisation()));
+
     // Embed the visualiser in the tab
     QHBoxLayout* horizLayout = new QHBoxLayout();
     horizLayout->addWidget(visualiser);
-    ui->visualizerTab->setLayout(horizLayout);
-
-    // Instantiate the camera controller and move it to the camera thread
-    cameraController = new CameraController();
-    cameraController->moveToThread(&cameraThread);
-    connect(&cameraThread, SIGNAL(finished()), cameraController, SLOT(deleteLater()));
-    connect(this, SIGNAL(startReadingCamera(void)), cameraController, SLOT(startReadingCamera(void)));
-    connect(this, SIGNAL(stopReadingCamera(void)), cameraController, SLOT(stopReadingCamera(void)));
-
-    // Connect image related signals to the visualiser and vice versa
-    qRegisterMetaType< cv::Mat >("cv::Mat");
-    connect(cameraController, SIGNAL(dataFromCamera(cv::Mat)), visualiser, SLOT(showImage(cv::Mat)));
-    connect(visualiser, SIGNAL(frameSizeChanged(int, int)), cameraController, SLOT(updateFrameSize(int, int)));
-    connect(visualiser, SIGNAL(robotSelectedInVisualiser(int)), this, SLOT(robotSelectedInVisualiser(int)));
-
-    // Connect tracking position data signal to data model
-    connect(cameraController, SIGNAL(posData(QString)), dataModel, SLOT(newData(QString)));
-    cameraThread.start();
-
-    // Have the visualiser pass its initial frame size to the camera controller
-    visualiser->checkFrameSize();
+    ui->visualiserTab->setLayout(horizLayout);
 
     visualiser->config.populateSettingsList(ui->visSettingsList);
 
     ui->imageXDimEdit->setValidator(new QIntValidator(1, 10000, this));
     ui->imageYDimEdit->setValidator(new QIntValidator(1, 10000, this));
     ui->angleCorrectionEdit->setValidator(new QIntValidator(-180, 180, this));
-
-    // Initalise the IR data view
-    irDataView = new IRDataView(dataModel);
-    QVBoxLayout* vertLayout = new QVBoxLayout();
-    vertLayout->addWidget(irDataView);
-    ui->proximityTab->setLayout(vertLayout);
 
     // Set up the custom data table
     ui->customDataTable->setColumnCount(2);
@@ -135,11 +115,20 @@ MainWindow::MainWindow(QWidget *parent) :
     addIDMappingDialog = NULL;
     idMappingTableSetup();
 
+    qRegisterMetaType<cv::Mat>("cv::Mat&");
+
+    arucoNameMapping[5] = "robot_5";
+
+    connect(&arucoTracker, SIGNAL(newRobotPosition(QString, Pose)), dataModel, SLOT(newRobotPosition(QString, Pose)));
+
+    connect(&cameraThread, SIGNAL(newVideoFrame(cv::Mat&)), visualiser, SLOT(newVideoFrame(cv::Mat&)));
+    connect(&cameraThread, SIGNAL(newVideoFrame(cv::Mat&)), &arucoTracker, SLOT(newImageReceived(cv::Mat&)));
+    connect(this, SIGNAL(stopReadingCamera()), &cameraThread, SLOT(endThread()));
+
+    cameraThread.start();
+
     // Start the camera reading immediately
     startReadingCamera();    
-
-    // Initialise the testing window to null
-    testingWindow = NULL;
 }
 
 /* Destructor.
@@ -151,17 +140,12 @@ MainWindow::~MainWindow()
     sendClosePacket(8888);
 
     // Stop the camera controller
-    stopReadingCamera();
+    emit stopReadingCamera();
 
     // Release all memory
     delete ui;
     delete dataModel;
     delete visualiser;
-
-    // Delete the testing window if existing
-    if (testingWindow != NULL) {
-        delete testingWindow;
-    }
 
     // Delete the id mapping dialog if existing
     if (addIDMappingDialog != NULL) {
@@ -203,7 +187,7 @@ void MainWindow::on_actionEnable_Video_changed()
 }
 
 /* on_videoEnChbx_stateChanged
- * The video enabled checkbox on the visualizer settings tab changed state.
+ * The video enabled checkbox on the visualiser settings tab changed state.
  */
 void MainWindow::on_videoEnChbx_stateChanged()
 {
@@ -225,7 +209,7 @@ void MainWindow::setVideo(bool enabled) {
 
     // Display a message
     if(enabled) {
-        ui->statusBar->showMessage("Viedo Enabled.", 3000);
+        ui->statusBar->showMessage("Video Enabled.", 3000);
     } else {
         ui->statusBar->showMessage("Video Disabled.", 3000);
     }
@@ -238,53 +222,54 @@ void MainWindow::robotListSelectionChanged(const QItemSelection &selection) {
     // Get the data of the robot selected
     int idx = selection.indexes().at(0).row();
     if (idx >= 0 || idx < dataModel->getRobotCount()) {
-        RobotData* robot = dataModel->getRobotByIndex(idx);
-
         // Update the selected robot id
-        dataModel->selectedRobotID = robot->getID();
+        RobotData* robot = dataModel->setSelectedRobot(idx);
 
         // Show a status bar message
-        ui->statusBar->showMessage(robot->getName(), 3000);
+        ui->statusBar->showMessage(robot->getID(), 3000);
+
+        ui->customDataTable->clear();
+        ui->customDataTable->setRowCount(0);
+
+        // @EXTEND: Add other data types
+        for(const auto& key : robot->getKeys(ValueType::String))
+        {
+            int newRowIndex = ui->customDataTable->rowCount();
+            ui->customDataTable->insertRow(newRowIndex);
+            ui->customDataTable->setItem(newRowIndex, 0, new QTableWidgetItem{key});
+            ui->customDataTable->setItem(newRowIndex, 1, new QTableWidgetItem{robot->getStringValue(key)});
+        }
     } else {
         dataModel->selectedRobotID = -1;
     }
-
-    // Update the overview tab
-    updateOverviewTab();
-
-    // Update the state tab
-    updateStateTab();
-
-    // Update the proximiy sensor tab
-    updateProximityTab();
 }
 
 /* on_robotList_doubleClicked
  * Called when an item in the robot list is double clicked, to open the
  * robot info dialog.
  */
-void MainWindow::on_robotList_doubleClicked(const QModelIndex &index)
+void MainWindow::on_robotList_doubleClicked(const QModelIndex &)
 {
     // Get the ID
-    int idx = index.row();
+//    int idx = index.row();
 
-    if (idx >= 0 || idx < dataModel->getRobotCount()) {
-        // Get the robot
-        RobotData* robot = dataModel->getRobotByIndex(idx);
+//    if (idx >= 0 || idx < dataModel->getRobotCount()) {
+//        // Get the robot
+//        RobotData* robot = dataModel->getRobotByIndex(idx);
 
-        // Create and show the robot info dialog
-        RobotInfoDialog* robotInfoDialog = new RobotInfoDialog(robot);
-        QObject::connect(robotInfoDialog, SIGNAL(deleteRobot(int)), dataModel, SLOT(deleteRobot(int)));
-        QObject::connect(robotInfoDialog, SIGNAL(accepted()), this, SLOT(robotDeleted()));
-        robotInfoDialog->show();
-    }
+//        // Create and show the robot info dialog
+//        RobotInfoDialog* robotInfoDialog = new RobotInfoDialog(robot);
+//        QObject::connect(robotInfoDialog, SIGNAL(deleteRobot(int)), dataModel, SLOT(deleteRobot(int)));
+//        QObject::connect(robotInfoDialog, SIGNAL(accepted()), this, SLOT(robotDeleted()));
+//        robotInfoDialog->show();
+//    }
 }
 
 /* robotSelectedInVisualiser
  * Slot. Called when a robot is selected by clicking the visualiser. Updates
  * the relevent model data and changes the selected item in the list.
  */
-void MainWindow::robotSelectedInVisualiser(int id) {
+void MainWindow::robotSelectedInVisualiser(QString id) {
     // Update selected ID
     dataModel->selectedRobotID = id;
 
@@ -296,7 +281,7 @@ void MainWindow::robotSelectedInVisualiser(int id) {
     for (int i = 0; i < stringList.size(); i++) {
         QString str = stringList.at(i);
 
-        if (str.startsWith(QString::number(id) + ":")) {
+        if (str.startsWith(id + ":")) {
             // Update selection
             ui->robotList->setCurrentIndex(ui->robotList->model()->index(i, 0));
         }
@@ -304,14 +289,6 @@ void MainWindow::robotSelectedInVisualiser(int id) {
 
     // Update the overview tab
     updateOverviewTab();
-
-    // Update the state tab
-    updateStateTab();
-
-    // Update the proximiy sensor tab
-    updateProximityTab();
-
-    updateCustomDataTab();
 }
 
 /* robotDeleted
@@ -334,18 +311,16 @@ void MainWindow::dataModelUpdate(bool listChanged)
     if (listChanged) {
         ui->robotList->setModel(dataModel->getRobotList());
 
-        int idx = dataModel->getRobotIndex(dataModel->selectedRobotID, false);
+//        int idx = dataModel->getRobotIndex(dataModel->selectedRobotID, false);
 
-        if (idx != -1) {
-            QModelIndex qidx = ui->robotList->model()->index(idx, 0);
-            ui->robotList->setCurrentIndex(qidx);
-        }
+//        if (idx != -1) {
+//            QModelIndex qidx = ui->robotList->model()->index(idx, 0);
+//            ui->robotList->setCurrentIndex(qidx);
+//        }
     }
 
     // Update the necessary data tabs
     updateOverviewTab();
-    updateProximityTab();
-    updateCustomDataTab();
 }
 
 /* updateOverviewTab
@@ -353,52 +328,16 @@ void MainWindow::dataModelUpdate(bool listChanged)
  */
 void MainWindow::updateOverviewTab(void) {
     // Get the selected robot
-    if (dataModel->selectedRobotID >= 0) {
-        RobotData* robot = dataModel->getRobotByID(dataModel->selectedRobotID);
-
+    RobotData* robot = dataModel->getRobotByID(dataModel->selectedRobotID);
+    if (robot) {
         // Update the overview text
-        ui->robotIDLabel->setText(QString::number(robot->getID()));
-        ui->robotNameLabel->setText(robot->getName());
-        ui->robotStateLabel->setText(robot->getState());
-        ui->robotPosLabel->setText("X: " + QString::number(robot->getPos().x) + ", Y: " + QString::number(robot->getPos().y) + ", A: " + QString::number(robot->getAngle()));
+        ui->robotIDLabel->setText(robot->getID());
+        ui->robotPosLabel->setText("X: " + QString::number(robot->getPos().position.x) + ", Y: " + QString::number(robot->getPos().position.y) + ", A: " + QString::number(robot->getAngle()));
     } else {
         ui->robotIDLabel->setText("-");
         ui->robotNameLabel->setText("-");
         ui->robotStateLabel->setText("-");
         ui->robotPosLabel->setText("-");
-    }
-}
-
-/* updateStateTab
- * Updates the contents of the state tab in response to new data.
- */
-void MainWindow::updateStateTab(void) {
-    // Get the selected robot
-    if (dataModel->selectedRobotID >= 0) {
-        RobotData* robot = dataModel->getRobotByID(dataModel->selectedRobotID);
-
-        // Update the state lists
-        ui->stateList->setModel(robot->getKnownStates());
-        ui->stateTransitionList->setModel(robot->getStateTransitionList());
-    }
-}
-
-/* updateProximityTab
- * Updates the contents of the IR data tab in response to new data.
- */
-void MainWindow::updateProximityTab(void) {
-    irDataView->repaint();
-}
-
-/* updateCustomDataTab
- * Updates the contents of the custom data tab in response to new data.
- */
-void MainWindow::updateCustomDataTab(void) {
-    // Get the selected robot
-    if (dataModel->selectedRobotID >= 0) {
-        RobotData* robot = dataModel->getRobotByID(dataModel->selectedRobotID);
-
-        robot->populateCustomDataTable(ui->customDataTable);
     }
 }
 
@@ -479,8 +418,6 @@ void MainWindow::on_imageXDimEdit_textChanged(const QString &arg1)
     if (ok) {
         Settings::instance()->setCameraImageWidth(w);
     }
-
-    visualiser->checkFrameSize();
 }
 
 /* on_imageYDimEdit_textChanged
@@ -495,8 +432,6 @@ void MainWindow::on_imageYDimEdit_textChanged(const QString &arg1)
     if (ok) {
         Settings::instance()->setCameraImageHeight(h);
     }
-
-    visualiser->checkFrameSize();
 }
 
 /* on_visSettingsList_itemClicked
@@ -552,22 +487,6 @@ void MainWindow::on_loggingButton_clicked()
     Log::instance()->setLoggingEnabled(!Log::instance()->isLoggingEnabled());
 
     ui->loggingButton->setText(Log::instance()->isLoggingEnabled() ? "Stop Logging" : "Start Logging");
-}
-
-/* on_actionTesting_Window_triggered
- * Called when the user presses the menu item to show the testing window
- */
-void MainWindow::on_actionTesting_Window_triggered()
-{
-    // If no testing window exists yet, create one
-    if (testingWindow == NULL) {
-        testingWindow = new TestingWindow();
-    }
-
-    // If the testing window exists show it
-    if (testingWindow != NULL) {
-        testingWindow->show();
-    }
 }
 
 /* idMappingTableSetup
